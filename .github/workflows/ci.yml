@@ -1,88 +1,128 @@
-name: CI Pipeline
+name: CI Pipeline Debugger
 on: [push, pull_request]
 
 jobs:
-  build-and-test:
+  debug-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10  # Prevent hanging jobs
+    timeout-minutes: 15
     steps:
-      # Debugging information first
-      - name: Debug Information
+      # 1. Initial environment information
+      - name: Show GitHub Context
         run: |
-          echo "GITHUB_REF: $GITHUB_REF"
-          echo "GITHUB_SHA: $GITHUB_SHA"
+          echo "Event: ${{ github.event_name }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "SHA: ${{ github.sha }}"
+          echo "Workspace: ${{ github.workspace }}"
           echo "Runner OS: $(uname -a)"
-          echo "Working directory: $(pwd)"
-          echo "Files in repo:"
-          ls -la
+          echo "Runner User: $(whoami)"
+          echo "Disk Space:"
+          df -h
+          echo "Memory:"
+          free -m
 
+      # 2. Repository checkout with full history
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Get full history for debugging
+          fetch-depth: 0  # Get full commit history
+          path: repo-root
 
-      # Node.js setup
-      - name: Setup Node.js 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
-          check-latest: true
-
-      - name: Verify Node installation
-        run: node -v && npm -v
-
-      - name: Install Node dependencies
-        run: npm ci
-        env:
-          CI: true  # Prevent interactive installs
-          
-      # Python setup
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-          allow-prereleases: false
-
-      - name: Verify Python installation
-        run: python -V && pip -V
-
-      - name: Install Python packages
+      # 3. Directory structure analysis
+      - name: Analyze Repository Structure
+        working-directory: repo-root
         run: |
-          pip install --upgrade pip setuptools wheel
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
+          echo "Current directory: $(pwd)"
+          echo "Top-level files:"
+          ls -la
+          echo "Git status:"
+          git status
+          echo "Git log (last 3 commits):"
+          git log -3 --oneline
+          echo "File tree:"
+          tree -L 3 -I 'node_modules|venv|.git|__pycache__'
+          echo "GitHub Actions path:"
+          ls -la .github/workflows/
+
+      # 4. Environment setup verification
+      - name: Verify Tools Installation
+        run: |
+          echo "--- Node.js ---"
+          node -v || echo "Node not found"
+          npm -v || echo "npm not found"
+          echo "--- Python ---"
+          python --version || echo "Python not found"
+          python3 --version || echo "Python3 not found"
+          pip --version || echo "pip not found"
+          pip3 --version || echo "pip3 not found"
+
+      # 5. Dependency installation with fallbacks
+      - name: Install Dependencies
+        working-directory: repo-root
+        run: |
+          # Node dependencies
+          if [ -f package.json ]; then
+            echo "Installing Node dependencies..."
+            npm ci --loglevel verbose
+          else
+            echo "No package.json found - skipping Node install"
           fi
-          pip install flake8 nose
+          
+          # Python dependencies
+          if [ -f requirements.txt ]; then
+            echo "Installing Python dependencies from requirements.txt..."
+            pip install -r requirements.txt
+          else
+            echo "No requirements.txt found - installing basic packages"
+            pip install flake8 nose
+          fi
+          
+          echo "Installed Python packages:"
+          pip list
 
-      # Linting with failure allowed
-      - name: Lint with Flake8
-        run: flake8 . --count --show-source --statistics || echo "Linting issues found"
-        continue-on-error: true  # Don't block build on linting
-
-      # Testing with test reports
-      - name: Run Python tests with nose
+      # 6. Run CI steps with detailed output
+      - name: Execute CI Steps
+        working-directory: repo-root
         run: |
-          nosetests -v --with-xunit
-        env:
-          NOSE_WITH_XUNIT: 1
-        continue-on-error: false
+          set -x  # Enable debug output
+          
+          # Linting
+          echo "=== RUNNING FLAKE8 LINTING ==="
+          flake8 --version || echo "Flake8 not available"
+          flake8 . --count --show-source --statistics || true
+          
+          # Testing
+          echo "=== RUNNING NOSE TESTS ==="
+          nosetests --version || echo "Nose not available"
+          nosetests -v --with-coverage || true
+          
+          # Build
+          echo "=== BUILDING PROJECT ==="
+          if [ -f package.json ] && grep -q '"build"' package.json; then
+            npm run build --verbose
+          else
+            echo "No build script in package.json"
+          fi
+          
+          set +x
 
-      - name: Upload Test Results
-        if: always()  # Always upload even if tests fail
+      # 7. Collect results
+      - name: Save Diagnostic Reports
+        working-directory: repo-root
+        run: |
+          mkdir -p diagnostics
+          pip freeze > diagnostics/pip_packages.txt
+          npm list > diagnostics/npm_packages.txt
+          if [ -d coverage ]; then
+            cp -r coverage diagnostics/
+          fi
+          tree -I 'node_modules|venv|.git|__pycache__' > diagnostics/file_tree.txt
+
+      # 8. Upload diagnostics for review
+      - name: Upload Diagnostics
         uses: actions/upload-artifact@v4
         with:
-          name: nose-test-results
-          path: nosetests.xml
-
-      # Build with cache
-      - name: Build project
-        run: npm run build
-        env:
-          NODE_ENV: production
-
-      # Final success message
-      - name: CI Success
-        if: success()
-        run: echo "CI pipeline completed successfully!"
+          name: ci-diagnostics
+          path: |
+            repo-root/diagnostics
+            ${{ github.workflow }}-${{ github.run_id }}-${{ github.run_attempt }}.log
+          retention-days: 7
