@@ -1,58 +1,52 @@
-name: CI workflow  # 1. Create GitHub workflow
+name: CI Pipeline
+on: [push, pull_request]  # Trigger on all branches for testing
 
-# 2. Add events to trigger the workflow
-on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
-
-# 3. Add a job to the workflow
 jobs:
-  build-and-test:  # Job ID
-    name: Build and Test
-    # 4. Add job runner (GitHub-hosted Ubuntu)
+  build-and-test:
     runs-on: ubuntu-latest
-    
-    # 5. Add container to job runner
-    container:
-      image: node:20-alpine  # Official Node.js container
-      options: --user node --workdir /home/node/app
-      volumes:
-        - /home/node/app/node_modules  # Cache node_modules
-
     steps:
-      # Checkout code
+      # Debug: Print environment info
+      - name: Debug - Show Context
+        run: |
+          echo "Branch: ${{ github.ref }}"
+          echo "Event: ${{ github.event_name }}"
+          pwd
+          ls -la
+
+      # Checkout
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Node Setup
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
       # Install dependencies
-      - name: Install Node dependencies
+      - name: Install dependencies
         run: npm ci
-      # python environment setup
-      - name: Setup python
-        uses: action/setup-python@v5
-        with: 
+
+      # Python Setup
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
           python-version: '3.11'
+          cache: 'pip'
 
-      - name: Install python dependencies
-        run: pip Install -r requirements.txt
+      # Python dependencies
+      - name: Install Python packages
+        run: pip install -r requirements.txt flake8 nose
 
-      # Lint code with Flake8
-      - name: Lint with Flake8
-        run: |
-          pip Install Flake8
-          flake8 . --count --show-source --statistics
-      # Run unit tests with nose 
-      - name: Run Python tests with nose 
-        run: |
-          pip Install nose
-          nosetests -v 
-          
-      # Run tests
-      - name: Execute tests
-        run: npm test
+      # Linting
+      - name: Run Flake8 linting
+        run: flake8 . --count --show-source --statistics
 
-      # Build project
+      # Testing
+      - name: Run Nose tests
+        run: nosetests -v
+
+      # Build
       - name: Build project
         run: npm run build
